@@ -30,9 +30,7 @@ export class FailoverDetector {
     this.sentinel.on("message", (channel: string) => {
       if (channel === CHANNEL_NAME) {
         debug("Failover detected, disconnecting");
-
-        // TODO start with regular disconnect, fallback to forced after timeout?
-        this.connector.forceDisconnect();
+        this.connector.disconnect();
       }
     });
   }

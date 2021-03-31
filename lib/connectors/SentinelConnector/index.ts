@@ -94,21 +94,6 @@ export default class SentinelConnector extends AbstractConnector {
     }
   }
 
-  /**
-   * Regular disconnect() uses stream.end(), which may leave the connection half-open
-   * indefinitely if the other end is unresponsive.
-   *
-   * forceDisconnect() uses stream.destroy() which explicitly closes the connection.
-   */
-  public forceDisconnect() {
-    if (this.stream) {
-      this.stream.destroy();
-      this.stream = null;
-    }
-
-    this.disconnect();
-  }
-
   public connect(eventEmitter: ErrorEmitter): Promise<NetStream> {
     this.connecting = true;
     this.retryAttempts = 0;
