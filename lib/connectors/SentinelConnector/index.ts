@@ -16,6 +16,7 @@ import { ISentinelAddress } from "./types";
 import AbstractConnector, { ErrorEmitter } from "../AbstractConnector";
 import { NetStream } from "../../types";
 import Redis from "../../redis";
+import { FailoverDetector } from "./FailoverDetector";
 
 const debug = Debug("SentinelConnector");
 
@@ -51,6 +52,7 @@ export interface ISentinelConnectionOptions extends ITcpConnectionOptions {
 
 export default class SentinelConnector extends AbstractConnector {
   private retryAttempts: number;
+  private failoverDetector: FailoverDetector | null = null;
   protected sentinelIterator: SentinelIterator;
 
   constructor(protected options: ISentinelConnectionOptions) {
@@ -82,6 +84,29 @@ export default class SentinelConnector extends AbstractConnector {
       this.sentinelIterator.reset(true);
     }
     return roleMatches;
+  }
+
+  public disconnect(): void {
+    super.disconnect();
+
+    if (this.failoverDetector) {
+      this.failoverDetector.disconnect();
+    }
+  }
+
+  /**
+   * Regular disconnect() uses stream.end(), which may leave the connection half-open
+   * indefinitely if the other end is unresponsive.
+   *
+   * forceDisconnect() uses stream.destroy() which explicitly closes the connection.
+   */
+  public forceDisconnect() {
+    if (this.stream) {
+      this.stream.destroy();
+      this.stream = null;
+    }
+
+    this.disconnect();
   }
 
   public connect(eventEmitter: ErrorEmitter): Promise<NetStream> {
@@ -134,8 +159,15 @@ export default class SentinelConnector extends AbstractConnector {
         throw new Error(CONNECTION_CLOSED_ERROR_MSG);
       }
 
+      const endpointAddress = endpoint.value.host + ":" + endpoint.value.port;
+
       if (resolved) {
-        debug("resolved: %s:%s", resolved.host, resolved.port);
+        debug(
+          "resolved: %s:%s from sentinel %s",
+          resolved.host,
+          resolved.port,
+          endpointAddress
+        );
         if (this.options.enableTLSForSentinelMode && this.options.tls) {
           Object.assign(resolved, this.options.tls);
           this.stream = createTLSConnection(resolved);
@@ -150,7 +182,6 @@ export default class SentinelConnector extends AbstractConnector {
         this.sentinelIterator.reset(true);
         return this.stream;
       } else {
-        const endpointAddress = endpoint.value.host + ":" + endpoint.value.port;
         const errorMsg = err
           ? "failed to connect to sentinel " +
             endpointAddress +
@@ -273,14 +304,25 @@ export default class SentinelConnector extends AbstractConnector {
     // ignore the errors since resolve* methods will handle them
     client.on("error", noop);
 
+    let result: ITcpConnectionOptions | null = null;
+
     try {
       if (this.options.role === "slave") {
-        return await this.resolveSlave(client);
+        result = await this.resolveSlave(client);
       } else {
-        return await this.resolveMaster(client);
+        result = await this.resolveMaster(client);
       }
+
+      if (result) {
+        // client can't be used for regular commands after this
+        this.failoverDetector = new FailoverDetector(this, client);
+      }
+
+      return result;
     } finally {
-      client.disconnect();
+      if (!result) {
+        client.disconnect();
+      }
     }
   }
 }
