@@ -50,6 +50,23 @@ export interface ISentinelConnectionOptions extends ITcpConnectionOptions {
   updateSentinels?: boolean;
 }
 
+// TODO: A proper typedef. This one only declares a small subset of all the members.
+export interface IRedisClient {
+  sentinel(subcommand: "sentinels", name: string): Promise<string[]>;
+  sentinel(
+    subcommand: "get-master-addr-by-name",
+    name: string
+  ): Promise<string[]>;
+  sentinel(subcommand: "slaves", name: string): Promise<string[]>;
+  subscribe(...channelNames: string[]): Promise<number>;
+  on(
+    event: "message",
+    callback: (channel: string, message: string) => void
+  ): void;
+  on(event: "error", callback: (error: Error) => void): void;
+  disconnect(): void;
+}
+
 export default class SentinelConnector extends AbstractConnector {
   private retryAttempts: number;
   private failoverDetector: FailoverDetector | null = null;
@@ -164,7 +181,6 @@ export default class SentinelConnector extends AbstractConnector {
           this.firstError = err;
         });
 
-        this.sentinelIterator.reset(true);
         return this.stream;
       } else {
         const errorMsg = err
@@ -192,7 +208,7 @@ export default class SentinelConnector extends AbstractConnector {
     return connectToNext();
   }
 
-  private async updateSentinels(client): Promise<void> {
+  private async updateSentinels(client: IRedisClient): Promise<void> {
     if (!this.options.updateSentinels) {
       return;
     }
@@ -225,7 +241,9 @@ export default class SentinelConnector extends AbstractConnector {
     debug("Updated internal sentinels: %s", this.sentinelIterator);
   }
 
-  private async resolveMaster(client): Promise<ITcpConnectionOptions | null> {
+  private async resolveMaster(
+    client: IRedisClient
+  ): Promise<ITcpConnectionOptions | null> {
     const result = await client.sentinel(
       "get-master-addr-by-name",
       this.options.name
@@ -240,7 +258,9 @@ export default class SentinelConnector extends AbstractConnector {
     );
   }
 
-  private async resolveSlave(client): Promise<ITcpConnectionOptions | null> {
+  private async resolveSlave(
+    client: IRedisClient
+  ): Promise<ITcpConnectionOptions | null> {
     const result = await client.sentinel("slaves", this.options.name);
 
     if (!Array.isArray(result)) {
@@ -267,8 +287,8 @@ export default class SentinelConnector extends AbstractConnector {
     return this.options.natMap[`${item.host}:${item.port}`] || item;
   }
 
-  private async resolve(endpoint): Promise<ITcpConnectionOptions | null> {
-    const client = new Redis({
+  private connectToSentinel(endpoint: Partial<ISentinelAddress>): IRedisClient {
+    return new Redis({
       port: endpoint.port || 26379,
       host: endpoint.host,
       username: this.options.sentinelUsername || null,
@@ -285,6 +305,41 @@ export default class SentinelConnector extends AbstractConnector {
       commandTimeout: this.options.sentinelCommandTimeout,
       dropBufferSupport: true,
     });
+  }
+
+  private startFailoverDetection(firstSentinel: IRedisClient): void {
+    // Move the current sentinel to the first position
+    this.sentinelIterator.reset(true);
+
+    const sentinels: IRedisClient[] = [firstSentinel];
+
+    // Skip the first sentinel that we've already connected to
+    this.sentinelIterator.next();
+
+    // In case of a large amount of sentinels, limit to 10 concurrent connections
+    while (sentinels.length < 10) {
+      const { done, value } = this.sentinelIterator.next();
+
+      if (done) {
+        break;
+      }
+
+      const sentinel = this.connectToSentinel(value);
+
+      // TODO: only push if the connection is successful
+      sentinels.push(sentinel);
+    }
+
+    // sentinels can't be used for regular commands after this
+    this.failoverDetector = new FailoverDetector(this, sentinels);
+
+    this.sentinelIterator.reset(false);
+  }
+
+  private async resolve(
+    endpoint: Partial<ISentinelAddress>
+  ): Promise<ITcpConnectionOptions | null> {
+    const client = this.connectToSentinel(endpoint);
 
     // ignore the errors since resolve* methods will handle them
     client.on("error", noop);
@@ -299,8 +354,7 @@ export default class SentinelConnector extends AbstractConnector {
       }
 
       if (result) {
-        // client can't be used for regular commands after this
-        this.failoverDetector = new FailoverDetector(this, client);
+        this.startFailoverDetection(client);
       }
 
       return result;
