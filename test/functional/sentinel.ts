@@ -100,18 +100,11 @@ describe("sentinel", function () {
       }
     });
 
-    it("should close the connection to the sentinel when resolving successfully", function (done) {
-      const sentinel = new MockServer(27379, function (argv) {
-        if (argv[0] === "sentinel" && argv[1] === "get-master-addr-by-name") {
-          return ["127.0.0.1", "17380"];
-        }
-      });
-      const master = new MockServer(17380);
+    it("should close the connection to the sentinel when resolving unsuccessfully", function (done) {
+      const sentinel = new MockServer(27379); // Does not respond properly to get-master-addr-by-name
       sentinel.once("disconnect", function () {
         redis.disconnect();
-        master.disconnect(function () {
-          sentinel.disconnect(done);
-        });
+        sentinel.disconnect(done);
       });
 
       var redis = new Redis({
@@ -140,17 +133,18 @@ describe("sentinel", function () {
         }
       });
       const master = new MockServer(17380);
-      sentinel.once("disconnect", function () {
+
+      var redis = new Redis({
+        sentinels: sentinels,
+        name: "master",
+      });
+
+      redis.on("ready", function () {
         redis.disconnect();
         master.disconnect(function () {
           expect(cloned.length).to.eql(2);
           sentinel.disconnect(done);
         });
-      });
-
-      var redis = new Redis({
-        sentinels: sentinels,
-        name: "master",
       });
     });
 
@@ -168,19 +162,20 @@ describe("sentinel", function () {
         }
       });
       const master = new MockServer(17380);
-      sentinel.once("disconnect", function () {
+
+      var redis = new Redis({
+        sentinels: sentinels,
+        updateSentinels: false,
+        name: "master",
+      });
+
+      redis.on("ready", function () {
         redis.disconnect();
         master.disconnect(function () {
           expect(sentinels.length).to.eql(1);
           expect(sentinels[0].port).to.eql(27379);
           sentinel.disconnect(done);
         });
-      });
-
-      var redis = new Redis({
-        sentinels: sentinels,
-        updateSentinels: false,
-        name: "master",
       });
     });
     it("should connect to sentinel with authentication successfully", function (done) {
