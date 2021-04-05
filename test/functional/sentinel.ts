@@ -2,6 +2,7 @@ import { Socket } from "net";
 
 import Redis from "../../lib/redis";
 import MockServer from "../helpers/mock_server";
+import { once } from "../helpers/once";
 import { expect } from "chai";
 import * as sinon from "sinon";
 
@@ -513,41 +514,34 @@ describe("sentinel", function () {
       });
     });
 
-    it("should disconnect when sentinel publishes message to +switch-master", function (done) {
+    it("should disconnect when sentinel publishes message to +switch-master", async function () {
       const sentinel = new MockServer(27379, function (argv) {
         if (argv[0] === "sentinel" && argv[1] === "get-master-addr-by-name") {
           return ["127.0.0.1", "17380"];
         }
-        if (argv[0] === "subscribe" && argv[1] === "+switch-master") {
-          return ["subscribe", "+switch-master", 1];
-        }
       });
       const master = new MockServer(17380);
-      master.on("connect", function (c: Socket) {
-        c.destroy();
-        sentinel.broadcast([
-          "message",
-          "+switch-master",
-          "master 127.0.0.1 17380 127.0.0.1 17381",
-        ]);
-      });
 
-      var redis = new Redis({
+      const redis = new Redis({
         sentinels: [{ host: "127.0.0.1", port: 27379 }],
         name: "master",
         retryStrategy: null, // Don't reconnect
       });
 
-      redis.on("error", done); // Fail if any errors occur
+      await once(master, "connect");
 
-      redis.on("close", async function () {
-        await Promise.all([
-          master.disconnectPromise(),
-          sentinel.disconnectPromise(),
-        ]);
+      sentinel.broadcast([
+        "message",
+        "+switch-master",
+        "master 127.0.0.1 17380 127.0.0.1 17381",
+      ]);
 
-        done();
-      });
+      await once(redis, "close");
+
+      await Promise.all([
+        master.disconnectPromise(),
+        sentinel.disconnectPromise(),
+      ]);
     });
   });
 });
