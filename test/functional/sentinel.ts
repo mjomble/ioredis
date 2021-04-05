@@ -514,21 +514,27 @@ describe("sentinel", function () {
       });
     });
 
-    it("should disconnect when sentinel publishes message to +switch-master", async function () {
+    it("should connect to new master after +switch-master", async function () {
       const sentinel = new MockServer(27379, function (argv) {
         if (argv[0] === "sentinel" && argv[1] === "get-master-addr-by-name") {
           return ["127.0.0.1", "17380"];
         }
       });
       const master = new MockServer(17380);
+      const newMaster = new MockServer(17381);
 
       const redis = new Redis({
         sentinels: [{ host: "127.0.0.1", port: 27379 }],
         name: "master",
-        retryStrategy: null, // Don't reconnect
       });
 
       await once(master, "connect");
+
+      sentinel.handler = function (argv) {
+        if (argv[0] === "sentinel" && argv[1] === "get-master-addr-by-name") {
+          return ["127.0.0.1", "17381"];
+        }
+      };
 
       sentinel.broadcast([
         "message",
@@ -536,10 +542,17 @@ describe("sentinel", function () {
         "master 127.0.0.1 17380 127.0.0.1 17381",
       ]);
 
-      await once(redis, "close");
+      await Promise.all([
+        once(redis, "close"), // Wait until disconnects from old master
+        once(master, "disconnect"),
+        once(newMaster, "connect"),
+      ]);
+
+      redis.disconnect(); // Disconnect from new master
 
       await Promise.all([
         master.disconnectPromise(),
+        newMaster.disconnectPromise(),
         sentinel.disconnectPromise(),
       ]);
     });
