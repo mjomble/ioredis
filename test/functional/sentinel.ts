@@ -528,7 +528,10 @@ describe("sentinel", function () {
         name: "master",
       });
 
-      await once(master, "connect");
+      await Promise.all([
+        once(master, "connect"),
+        once(redis, "failover-subscribed"),
+      ]);
 
       sentinel.handler = function (argv) {
         if (argv[0] === "sentinel" && argv[1] === "get-master-addr-by-name") {
@@ -551,9 +554,62 @@ describe("sentinel", function () {
       redis.disconnect(); // Disconnect from new master
 
       await Promise.all([
+        sentinel.disconnectPromise(),
         master.disconnectPromise(),
         newMaster.disconnectPromise(),
-        sentinel.disconnectPromise(),
+      ]);
+    });
+
+    it("should detect failover from secondary sentinel", async function () {
+      const sentinel1 = new MockServer(27379, function (argv) {
+        if (argv[0] === "sentinel" && argv[1] === "get-master-addr-by-name") {
+          return ["127.0.0.1", "17380"];
+        }
+      });
+      const sentinel2 = new MockServer(27380);
+      const master = new MockServer(17380);
+      const newMaster = new MockServer(17381);
+
+      const redis = new Redis({
+        sentinels: [
+          { host: "127.0.0.1", port: 27379 },
+          { host: "127.0.0.1", port: 27380 },
+        ],
+        name: "master",
+      });
+
+      await Promise.all([
+        once(master, "connect"),
+        once(redis, "failover-subscribed"),
+      ]);
+
+      // In this test, only the first sentinel is used to resolve the master
+      sentinel1.handler = function (argv) {
+        if (argv[0] === "sentinel" && argv[1] === "get-master-addr-by-name") {
+          return ["127.0.0.1", "17381"];
+        }
+      };
+
+      // But only the second sentinel broadcasts +switch-master
+      sentinel2.broadcast([
+        "message",
+        "+switch-master",
+        "master 127.0.0.1 17380 127.0.0.1 17381",
+      ]);
+
+      await Promise.all([
+        once(redis, "close"), // Wait until disconnects from old master
+        once(master, "disconnect"),
+        once(newMaster, "connect"),
+      ]);
+
+      redis.disconnect(); // Disconnect from new master
+
+      await Promise.all([
+        sentinel1.disconnectPromise(),
+        sentinel2.disconnectPromise(),
+        master.disconnectPromise(),
+        newMaster.disconnectPromise(),
       ]);
     });
   });

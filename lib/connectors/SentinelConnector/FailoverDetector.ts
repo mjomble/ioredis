@@ -8,52 +8,49 @@ const CHANNEL_NAME = "+switch-master";
 export class FailoverDetector {
   private connector: SentinelConnector;
   private sentinels: IRedisClient[];
+  private isDisconnected = false;
 
   // sentinels can't be used for regular commands after this
   constructor(connector: SentinelConnector, sentinels: IRedisClient[]) {
     this.connector = connector;
     this.sentinels = sentinels;
-
-    this.subscribe();
   }
 
-  public disconnect() {
-    for (const sentinel of this.sentinels) {
-      sentinel.disconnect();
-    }
-  }
-
-  private subscribe() {
+  public subscribe() {
     debug("Starting FailoverDetector on sentinels");
 
-    let lastMasterIp = "";
-    let lastMasterPort = "";
+    const promises: Promise<unknown>[] = [];
 
     for (const sentinel of this.sentinels) {
-      sentinel.subscribe(CHANNEL_NAME).catch((err) => {
+      const promise = sentinel.subscribe(CHANNEL_NAME).catch((err) => {
         console.error("Failed to subscribe to Redis failover events:", err); // TODO ErrorEmitter
       });
 
+      promises.push(promise);
+
       // TODO detect lost/hanging connections
 
-      sentinel.on("message", (channel: string, message: string) => {
-        if (channel !== CHANNEL_NAME) {
-          return;
-        }
-
-        // message example: "mymaster 172.26.0.4 6379 172.26.0.3 6379"
-        const [, , , newIp, newPort] = message.split(" ");
-
-        // We can get the same message about the same failover from multiple sentinels.
-        // Make sure we only disconnect once per failover.
-        if (newIp !== lastMasterIp || newPort !== lastMasterPort) {
-          lastMasterIp = newIp;
-          lastMasterPort = newPort;
-
-          debug("Failover detected, disconnecting");
-          this.connector.disconnect();
+      sentinel.on("message", (channel: string) => {
+        if (!this.isDisconnected && channel === CHANNEL_NAME) {
+          this.disconnect();
         }
       });
     }
+
+    return Promise.all(promises);
+  }
+
+  private disconnect() {
+    // Avoid disconnecting more than once per failover.
+    // A new FailoverDetector will be created after reconnecting.
+    this.isDisconnected = true;
+
+    debug("Failover detected, disconnecting");
+
+    for (const sentinel of this.sentinels) {
+      sentinel.disconnect();
+    }
+
+    this.connector.disconnect();
   }
 }

@@ -1,3 +1,4 @@
+import { EventEmitter } from "events";
 import { createConnection } from "net";
 import { INatMap } from "../../cluster/ClusterOptions";
 import {
@@ -71,6 +72,7 @@ export default class SentinelConnector extends AbstractConnector {
   private retryAttempts: number;
   private failoverDetector: FailoverDetector | null = null;
   protected sentinelIterator: SentinelIterator;
+  public emitter: EventEmitter | null = null;
 
   constructor(protected options: ISentinelConnectionOptions) {
     super(options.disconnectTimeout);
@@ -101,14 +103,6 @@ export default class SentinelConnector extends AbstractConnector {
       this.sentinelIterator.reset(true);
     }
     return roleMatches;
-  }
-
-  public disconnect(): void {
-    super.disconnect();
-
-    if (this.failoverDetector) {
-      this.failoverDetector.disconnect();
-    }
   }
 
   public connect(eventEmitter: ErrorEmitter): Promise<NetStream> {
@@ -332,6 +326,11 @@ export default class SentinelConnector extends AbstractConnector {
 
     // sentinels can't be used for regular commands after this
     this.failoverDetector = new FailoverDetector(this, sentinels);
+
+    this.failoverDetector.subscribe().then(() => {
+      // Tests listen to this event
+      this.emitter?.emit("failover-subscribed");
+    });
 
     this.sentinelIterator.reset(false);
   }
