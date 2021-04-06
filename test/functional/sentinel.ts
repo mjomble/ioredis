@@ -50,6 +50,38 @@ describe("sentinel", function () {
       });
     });
 
+    it("should skip an unresponsive sentinel", async function () {
+      const clock = sinon.useFakeTimers();
+      const sentinel1 = new MockServer(27379, function (argv, socket, flags) {
+        flags.hang = true;
+      });
+      const sentinel2 = new MockServer(27380, function (argv) {
+        if (argv[0] === "sentinel" && argv[1] === "get-master-addr-by-name") {
+          return ["127.0.0.1", "17380"];
+        }
+      });
+      const master = new MockServer(17380);
+
+      const redis = new Redis({
+        sentinels: [
+          { host: "127.0.0.1", port: 27379 },
+          { host: "127.0.0.1", port: 27380 },
+        ],
+        name: "master",
+        sentinelCommandTimeout: 1000,
+      });
+
+      clock.tick(1000);
+      await once(master, "connect");
+      redis.disconnect();
+      await Promise.all([
+        sentinel1.disconnectPromise(),
+        sentinel2.disconnectPromise(),
+        master.disconnectPromise(),
+      ]);
+      clock.restore();
+    });
+
     it("should call sentinelRetryStrategy when all sentinels are unreachable", function (done) {
       let t = 0;
       var redis = new Redis({
@@ -181,6 +213,7 @@ describe("sentinel", function () {
         });
       });
     });
+
     it("should connect to sentinel with authentication successfully", function (done) {
       let authed = false;
       var redisServer = new MockServer(17380, function (argv) {
