@@ -6,6 +6,12 @@ import { once } from "../helpers/once";
 import { expect } from "chai";
 import * as sinon from "sinon";
 
+function triggerParseError(socket: Socket) {
+  // Valid first characters: '$', '+', '*', ':', '-'
+  // To trigger an error, we need to write a different character
+  socket.write("A");
+}
+
 describe("sentinel", function () {
   describe("connect", function () {
     it("should connect to sentinel successfully", function (done) {
@@ -641,6 +647,84 @@ describe("sentinel", function () {
       await Promise.all([
         sentinel1.disconnectPromise(),
         sentinel2.disconnectPromise(),
+        master.disconnectPromise(),
+        newMaster.disconnectPromise(),
+      ]);
+    });
+
+    it("should detect failover when some sentinels fail", async function () {
+      // Will disconnect before failover
+      const sentinel1 = new MockServer(27379, (argv) => {
+        if (argv[0] === "sentinel" && argv[1] === "get-master-addr-by-name") {
+          return ["127.0.0.1", "17380"];
+        }
+      });
+
+      // Will emit an error before failover
+      let sentinel2Socket: Socket | null = null;
+      const sentinel2 = new MockServer(27380, (argv, socket) => {
+        sentinel2Socket = socket;
+      });
+
+      // Fails to subscribe
+      const sentinel3 = new MockServer(27381, (argv, socket, flags) => {
+        if (argv[0] === "subscribe") {
+          triggerParseError(socket);
+        }
+      });
+
+      // The only sentinel that can successfully publish the failover message
+      const sentinel4 = new MockServer(27382);
+
+      const master = new MockServer(17380);
+      const newMaster = new MockServer(17381);
+
+      const redis = new Redis({
+        sentinels: [
+          { host: "127.0.0.1", port: 27379 },
+          { host: "127.0.0.1", port: 27380 },
+          { host: "127.0.0.1", port: 27381 },
+          { host: "127.0.0.1", port: 27382 },
+        ],
+        name: "master",
+      });
+
+      await Promise.all([
+        once(master, "connect"),
+
+        // Must resolve even though subscribing to sentinel3 fails
+        once(redis, "failover-subscribed"),
+      ]);
+
+      // Fail sentinels 1 and 2
+      await sentinel1.disconnectPromise();
+      triggerParseError(sentinel2Socket);
+
+      sentinel4.handler = function (argv) {
+        if (argv[0] === "sentinel" && argv[1] === "get-master-addr-by-name") {
+          return ["127.0.0.1", "17381"];
+        }
+      };
+
+      sentinel4.broadcast([
+        "message",
+        "+switch-master",
+        "master 127.0.0.1 17380 127.0.0.1 17381",
+      ]);
+
+      await Promise.all([
+        once(redis, "close"), // Wait until disconnects from old master
+        once(master, "disconnect"),
+        once(newMaster, "connect"),
+      ]);
+
+      redis.disconnect(); // Disconnect from new master
+
+      await Promise.all([
+        // sentinel1 is already disconnected
+        sentinel2.disconnectPromise(),
+        sentinel3.disconnectPromise(),
+        sentinel4.disconnectPromise(),
         master.disconnectPromise(),
         newMaster.disconnectPromise(),
       ]);

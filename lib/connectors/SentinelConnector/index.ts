@@ -17,7 +17,7 @@ import { ISentinelAddress } from "./types";
 import AbstractConnector, { ErrorEmitter } from "../AbstractConnector";
 import { NetStream } from "../../types";
 import Redis from "../../redis";
-import { FailoverDetector } from "./FailoverDetector";
+import { FailoverDetector, ISentinel } from "./FailoverDetector";
 
 const debug = Debug("SentinelConnector");
 
@@ -103,6 +103,14 @@ export default class SentinelConnector extends AbstractConnector {
       this.sentinelIterator.reset(true);
     }
     return roleMatches;
+  }
+
+  public disconnect(): void {
+    super.disconnect();
+
+    if (this.failoverDetector) {
+      this.failoverDetector.cleanup();
+    }
   }
 
   public connect(eventEmitter: ErrorEmitter): Promise<NetStream> {
@@ -301,11 +309,11 @@ export default class SentinelConnector extends AbstractConnector {
     });
   }
 
-  private startFailoverDetection(firstSentinel: IRedisClient): void {
+  private startFailoverDetection(firstSentinel: ISentinel): void {
     // Move the current sentinel to the first position
     this.sentinelIterator.reset(true);
 
-    const sentinels: IRedisClient[] = [firstSentinel];
+    const sentinels: ISentinel[] = [firstSentinel];
 
     // Skip the first sentinel that we've already connected to
     this.sentinelIterator.next();
@@ -319,9 +327,7 @@ export default class SentinelConnector extends AbstractConnector {
       }
 
       const sentinel = this.connectToSentinel(value);
-
-      // TODO: only push if the connection is successful
-      sentinels.push(sentinel);
+      sentinels.push({ address: value, client: sentinel });
     }
 
     // sentinels can't be used for regular commands after this
@@ -353,7 +359,7 @@ export default class SentinelConnector extends AbstractConnector {
       }
 
       if (result) {
-        this.startFailoverDetection(client);
+        this.startFailoverDetection({ address: endpoint, client });
       }
 
       return result;
