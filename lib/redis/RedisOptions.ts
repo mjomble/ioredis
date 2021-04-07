@@ -52,6 +52,9 @@ export const DEFAULT_REDIS_OPTIONS: IRedisOptions = {
   sentinelRetryStrategy: function (times) {
     return Math.min(times * 10, 1000);
   },
+  sentinelReconnectStrategy: function () {
+    return 60000;
+  },
   natMap: null,
   enableTLSForSentinelMode: false,
   updateSentinels: true,

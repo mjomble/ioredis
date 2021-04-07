@@ -17,6 +17,7 @@ import { ISentinelAddress } from "./types";
 import AbstractConnector, { ErrorEmitter } from "../AbstractConnector";
 import { NetStream } from "../../types";
 import Redis from "../../redis";
+import { IRedisOptions } from "../../redis/RedisOptions";
 import { FailoverDetector, ISentinel } from "./FailoverDetector";
 
 const debug = Debug("SentinelConnector");
@@ -41,6 +42,7 @@ export interface ISentinelConnectionOptions extends ITcpConnectionOptions {
   sentinelPassword?: string;
   sentinels: Array<Partial<ISentinelAddress>>;
   sentinelRetryStrategy?: (retryAttempts: number) => number | void | null;
+  sentinelReconnectStrategy?: (retryAttempts: number) => number | void | null;
   preferredSlaves?: PreferredSlaves;
   connectTimeout?: number;
   disconnectTimeout?: number;
@@ -53,6 +55,7 @@ export interface ISentinelConnectionOptions extends ITcpConnectionOptions {
 
 // TODO: A proper typedef. This one only declares a small subset of all the members.
 export interface IRedisClient {
+  options: IRedisOptions;
   sentinel(subcommand: "sentinels", name: string): Promise<string[]>;
   sentinel(
     subcommand: "get-master-addr-by-name",
@@ -65,6 +68,7 @@ export interface IRedisClient {
     callback: (channel: string, message: string) => void
   ): void;
   on(event: "error", callback: (error: Error) => void): void;
+  on(event: "reconnecting", callback: () => void): void;
   disconnect(): void;
 }
 
@@ -330,12 +334,22 @@ export default class SentinelConnector extends AbstractConnector {
       sentinels.push({ address: value, client: sentinel });
     }
 
+    for (const sentinel of sentinels) {
+      // Apply reconnect strategy to sentinels now that we're no longer looking for master
+      sentinel.client.options.retryStrategy = this.options.sentinelReconnectStrategy;
+
+      sentinel.client.on("reconnecting", () => {
+        // Tests listen to this event
+        this.emitter?.emit("sentinelReconnecting");
+      });
+    }
+
     // sentinels can't be used for regular commands after this
     this.failoverDetector = new FailoverDetector(this, sentinels);
 
     this.failoverDetector.subscribe().then(() => {
       // Tests listen to this event
-      this.emitter?.emit("failover-subscribed");
+      this.emitter?.emit("failoverSubscribed");
     });
 
     this.sentinelIterator.reset(false);
