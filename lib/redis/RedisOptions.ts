@@ -78,4 +78,5 @@ export const DEFAULT_REDIS_OPTIONS: IRedisOptions = {
   enableAutoPipelining: false,
   autoPipeliningIgnoredCommands: [],
   maxScriptsCachingTime: 60000,
+  sentinelMaxConnections: 10,
 };

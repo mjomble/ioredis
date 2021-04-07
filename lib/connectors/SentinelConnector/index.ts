@@ -51,6 +51,7 @@ export interface ISentinelConnectionOptions extends ITcpConnectionOptions {
   sentinelTLS?: ConnectionOptions;
   natMap?: INatMap;
   updateSentinels?: boolean;
+  sentinelMaxConnections?: number;
 }
 
 // TODO: A proper typedef. This one only declares a small subset of all the members.
@@ -322,8 +323,8 @@ export default class SentinelConnector extends AbstractConnector {
     // Skip the first sentinel that we've already connected to
     this.sentinelIterator.next();
 
-    // In case of a large amount of sentinels, limit to 10 concurrent connections
-    while (sentinels.length < 10) {
+    // In case of a large amount of sentinels, limit the number of concurrent connections
+    while (sentinels.length < this.options.sentinelMaxConnections) {
       const { done, value } = this.sentinelIterator.next();
 
       if (done) {
