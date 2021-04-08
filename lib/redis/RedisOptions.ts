@@ -53,6 +53,11 @@ export const DEFAULT_REDIS_OPTIONS: IRedisOptions = {
     return Math.min(times * 10, 1000);
   },
   sentinelReconnectStrategy: function () {
+    // This strategy only applies when sentinels are used for detecting
+    // a failover, not during initial master resolution.
+    // The deployment can still function when some of the sentinels are down
+    // for a long period of time, so we may not want to attempt reconnection
+    // very often. Therefore the default interval is fairly long (1 minute).
     return 60000;
   },
   natMap: null,

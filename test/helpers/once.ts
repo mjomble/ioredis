@@ -1,4 +1,4 @@
-// TODO use 'import { once } from "events";' instead of this
+// TODO: use 'import { once } from "events";' instead of this
 // after upgrading minimum Node.js version to 10.16+
 
 // This polyfill is from https://github.com/davidmarkclements/events.once

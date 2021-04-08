@@ -345,9 +345,9 @@ export default class SentinelConnector extends AbstractConnector {
       });
     }
 
-    // sentinels can't be used for regular commands after this
     this.failoverDetector = new FailoverDetector(this, sentinels);
 
+    // The sentinel clients can't be used for regular commands after this
     this.failoverDetector.subscribe().then(() => {
       // Tests listen to this event
       this.emitter?.emit("failoverSubscribed");
@@ -380,6 +380,8 @@ export default class SentinelConnector extends AbstractConnector {
       return result;
     } finally {
       if (!result) {
+        // Only disconnect if we didn't get a result.
+        // Otherwise we'll use this connection for failover detection.
         client.disconnect();
       }
     }
