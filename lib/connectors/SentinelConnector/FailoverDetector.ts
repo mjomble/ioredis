@@ -3,7 +3,8 @@ import SentinelConnector, { IRedisClient, ISentinelAddress } from "./index";
 
 export interface ISentinel {
   address: Partial<ISentinelAddress>;
-  client: IRedisClient;
+  isConnected: boolean;
+  getClient: () => IRedisClient;
 }
 
 const debug = Debug("FailoverDetector");
@@ -22,18 +23,28 @@ export class FailoverDetector {
   }
 
   public cleanup() {
+    this.isDisconnected = true;
+
     for (const sentinel of this.sentinels) {
-      sentinel.client.disconnect();
+      if (sentinel.isConnected) {
+        sentinel.getClient().disconnect();
+      }
     }
   }
 
-  public subscribe() {
-    debug("Starting FailoverDetector on sentinels");
+  public getClients() {
+    return this.sentinels.map((sentinel) => sentinel.getClient());
+  }
+
+  public async subscribe() {
+    debug("Starting FailoverDetector");
 
     const promises: Promise<unknown>[] = [];
 
     for (const sentinel of this.sentinels) {
-      const promise = sentinel.client.subscribe(CHANNEL_NAME).catch((err) => {
+      const client = sentinel.getClient();
+
+      const promise = client.subscribe(CHANNEL_NAME).catch((err) => {
         debug(
           "Failed to subscribe to failover messages on sentinel %s:%s (%s)",
           sentinel.address.host || "127.0.0.1",
@@ -44,16 +55,14 @@ export class FailoverDetector {
 
       promises.push(promise);
 
-      // TODO detect lost/hanging connections
-
-      sentinel.client.on("message", (channel: string) => {
+      client.on("message", (channel: string) => {
         if (!this.isDisconnected && channel === CHANNEL_NAME) {
           this.disconnect();
         }
       });
     }
 
-    return Promise.all(promises);
+    await Promise.all(promises);
   }
 
   private disconnect() {
